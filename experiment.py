@@ -494,89 +494,237 @@ class EntropyTracker:
                 latest[key] = values[-1]
         return latest
 
+    def _synchronize_arrays(self):
+        """Ensure all entropy history arrays have the same length as iteration_history"""
+        if not self.iteration_history:
+            return
+
+        target_length = len(self.iteration_history)
+
+        # Synchronize all entropy history arrays
+        for key in list(self.entropy_history.keys()):
+            if isinstance(self.entropy_history[key], list):
+                current_length = len(self.entropy_history[key])
+                if current_length != target_length:
+                    # Truncate or pad to match target length
+                    if current_length > target_length:
+                        self.entropy_history[key] = self.entropy_history[key][
+                            :target_length
+                        ]
+                    else:
+                        # Pad with the last value if shorter
+                        if current_length > 0:
+                            last_value = self.entropy_history[key][-1]
+                            self.entropy_history[key].extend(
+                                [last_value] * (target_length - current_length)
+                            )
+                        else:
+                            # If completely empty, pad with zeros
+                            self.entropy_history[key] = [0.0] * target_length
+
     def plot_entropy_evolution(self, save_path=None, show_layers=False):
         """Plot entropy evolution over training"""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle("Parameter Entropy Evolution During Training")
+        try:
+            # First, synchronize all arrays to the same length
+            self._synchronize_arrays()
 
-        # Plot total entropy
-        if "entropy_total" in self.entropy_history:
-            axes[0, 0].plot(
-                self.iteration_history,
-                self.entropy_history["entropy_total"],
-                "b-",
-                linewidth=2,
-            )
-            axes[0, 0].set_title("Total Parameter Entropy")
-            axes[0, 0].set_xlabel("Iteration")
-            axes[0, 0].set_ylabel("Entropy (bits)")
-            axes[0, 0].grid(True)
+            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+            fig.suptitle("Parameter Entropy Evolution During Training")
 
-        # Plot component entropies if available
-        component_keys = [
-            k
-            for k in self.entropy_history.keys()
-            if k.startswith("entropy_")
-            and k != "entropy_total"
-            and not k.startswith("entropy_layer_")
-        ]
-        if component_keys:
-            for key in component_keys:
-                label = key.replace("entropy_", "").replace("_", " ").title()
-                axes[0, 1].plot(
-                    self.iteration_history,
-                    self.entropy_history[key],
-                    label=label,
-                    linewidth=2,
+            # Plot total entropy
+            if (
+                "entropy_total" in self.entropy_history
+                and len(self.entropy_history["entropy_total"]) > 0
+            ):
+                entropy_data = self.entropy_history["entropy_total"]
+                iter_data = self.iteration_history
+
+                print(
+                    f"   Plotting total entropy: {len(iter_data)} iterations, {len(entropy_data)} entropy points"
                 )
-            axes[0, 1].set_title("Component Entropy")
-            axes[0, 1].set_xlabel("Iteration")
-            axes[0, 1].set_ylabel("Entropy (bits)")
-            axes[0, 1].legend()
-            axes[0, 1].grid(True)
 
-        # Plot layer entropies if available
-        layer_keys = [
-            k for k in self.entropy_history.keys() if k.startswith("entropy_layer_")
-        ]
-        if layer_keys and show_layers:
-            for key in layer_keys:
-                layer_num = key.replace("entropy_layer_", "")
-                axes[1, 0].plot(
-                    self.iteration_history,
-                    self.entropy_history[key],
-                    label=f"Layer {layer_num}",
-                    linewidth=1.5,
+                if (
+                    len(entropy_data) > 0
+                    and len(iter_data) > 0
+                    and len(entropy_data) == len(iter_data)
+                ):
+                    axes[0, 0].plot(
+                        iter_data,
+                        entropy_data,
+                        "b-",
+                        linewidth=2,
+                    )
+                    axes[0, 0].set_title("Total Parameter Entropy")
+                    axes[0, 0].set_xlabel("Iteration")
+                    axes[0, 0].set_ylabel("Entropy (bits)")
+                    axes[0, 0].grid(True)
+                else:
+                    print(
+                        f"   Skipping total entropy plot due to length mismatch: iter={len(iter_data)}, entropy={len(entropy_data)}"
+                    )
+
+            # Plot component entropies if available
+            component_keys = [
+                k
+                for k in self.entropy_history.keys()
+                if k.startswith("entropy_")
+                and k != "entropy_total"
+                and not k.startswith("entropy_layer_")
+            ]
+
+            has_component_plots = False
+            if component_keys:
+                iter_data = self.iteration_history
+                for key in component_keys:
+                    if (
+                        key in self.entropy_history
+                        and len(self.entropy_history[key]) > 0
+                    ):
+                        entropy_data = self.entropy_history[key]
+
+                        if (
+                            len(entropy_data) == len(iter_data)
+                            and len(entropy_data) > 0
+                        ):
+                            label = (
+                                key.replace("entropy_", "").replace("_", " ").title()
+                            )
+                            axes[0, 1].plot(
+                                iter_data,
+                                entropy_data,
+                                label=label,
+                                linewidth=2,
+                            )
+                            has_component_plots = True
+                        else:
+                            print(
+                                f"   Skipping {key}: length mismatch iter={len(iter_data)}, entropy={len(entropy_data)}"
+                            )
+
+            if has_component_plots:
+                axes[0, 1].set_title("Component Entropy")
+                axes[0, 1].set_xlabel("Iteration")
+                axes[0, 1].set_ylabel("Entropy (bits)")
+                axes[0, 1].legend()
+                axes[0, 1].grid(True)
+            else:
+                axes[0, 1].text(
+                    0.5,
+                    0.5,
+                    "No component data\navailable",
+                    ha="center",
+                    va="center",
+                    transform=axes[0, 1].transAxes,
                 )
-            axes[1, 0].set_title("Layer-wise Entropy")
-            axes[1, 0].set_xlabel("Iteration")
-            axes[1, 0].set_ylabel("Entropy (bits)")
-            axes[1, 0].legend()
-            axes[1, 0].grid(True)
+                axes[0, 1].set_title("Component Entropy (No Data)")
 
-        # Plot entropy distribution
-        if "entropy_total" in self.entropy_history:
-            axes[1, 1].hist(
-                self.entropy_history["entropy_total"],
-                bins=20,
-                alpha=0.7,
-                color="skyblue",
-                edgecolor="black",
-            )
-            axes[1, 1].set_title("Total Entropy Distribution")
-            axes[1, 1].set_xlabel("Entropy (bits)")
-            axes[1, 1].set_ylabel("Frequency")
-            axes[1, 1].grid(True)
+            # Plot layer entropies if available
+            layer_keys = [
+                k for k in self.entropy_history.keys() if k.startswith("entropy_layer_")
+            ]
 
-        plt.tight_layout()
+            has_layer_plots = False
+            if layer_keys and show_layers:
+                iter_data = self.iteration_history
+                for key in layer_keys:
+                    if (
+                        key in self.entropy_history
+                        and len(self.entropy_history[key]) > 0
+                    ):
+                        entropy_data = self.entropy_history[key]
 
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches="tight")
-            print(f"📊 Entropy evolution plot saved: {save_path}")
-        else:
-            plt.show()
+                        if (
+                            len(entropy_data) == len(iter_data)
+                            and len(entropy_data) > 0
+                        ):
+                            layer_num = key.replace("entropy_layer_", "")
+                            axes[1, 0].plot(
+                                iter_data,
+                                entropy_data,
+                                label=f"Layer {layer_num}",
+                                linewidth=1.5,
+                            )
+                            has_layer_plots = True
+                        else:
+                            print(
+                                f"   Skipping {key}: length mismatch iter={len(iter_data)}, entropy={len(entropy_data)}"
+                            )
 
-        plt.close()
+            if has_layer_plots:
+                axes[1, 0].set_title("Layer-wise Entropy")
+                axes[1, 0].set_xlabel("Iteration")
+                axes[1, 0].set_ylabel("Entropy (bits)")
+                axes[1, 0].legend()
+                axes[1, 0].grid(True)
+            else:
+                axes[1, 0].text(
+                    0.5,
+                    0.5,
+                    "No layer data\navailable",
+                    ha="center",
+                    va="center",
+                    transform=axes[1, 0].transAxes,
+                )
+                axes[1, 0].set_title("Layer Entropy (No Data)")
+
+            # Plot entropy distribution
+            if (
+                "entropy_total" in self.entropy_history
+                and len(self.entropy_history["entropy_total"]) > 0
+            ):
+                entropy_data = self.entropy_history["entropy_total"]
+                if len(entropy_data) > 0:
+                    axes[1, 1].hist(
+                        entropy_data,
+                        bins=min(
+                            20, len(set(entropy_data))
+                        ),  # Adjust bins based on unique values
+                        alpha=0.7,
+                        color="skyblue",
+                        edgecolor="black",
+                    )
+                    axes[1, 1].set_title("Total Entropy Distribution")
+                    axes[1, 1].set_xlabel("Entropy (bits)")
+                    axes[1, 1].set_ylabel("Frequency")
+                    axes[1, 1].grid(True)
+                else:
+                    axes[1, 1].text(
+                        0.5,
+                        0.5,
+                        "No entropy data\nfor distribution",
+                        ha="center",
+                        va="center",
+                        transform=axes[1, 1].transAxes,
+                    )
+                    axes[1, 1].set_title("Entropy Distribution (No Data)")
+            else:
+                axes[1, 1].text(
+                    0.5,
+                    0.5,
+                    "No entropy data\nfor distribution",
+                    ha="center",
+                    va="center",
+                    transform=axes[1, 1].transAxes,
+                )
+                axes[1, 1].set_title("Entropy Distribution (No Data)")
+
+            plt.tight_layout()
+
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches="tight")
+                print(f"📊 Entropy evolution plot saved: {save_path}")
+            else:
+                plt.show()
+
+            plt.close()
+
+        except Exception as e:
+            print(f"❌ Error creating entropy evolution plot: {e}")
+            import traceback
+
+            traceback.print_exc()
+            if "fig" in locals():
+                plt.close(fig)
 
 
 def analyze_entropy_scaling(entropy_tracker):

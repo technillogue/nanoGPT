@@ -1717,11 +1717,13 @@ def generate_parameter_analysis_plots(output_dir):
 
 
 def generate_experiment_comparison_plots(base_output_dir, results):
-    """Generate comparison plots across all experiments"""
+    """Generate comprehensive comparison plots across all experiments"""
     print("\n📈 Generating experiment comparison plots...")
 
     # Collect data from all successful experiments
     experiment_data = []
+    entropy_evolution_data = {}  # Store entropy evolution for each experiment
+
     for exp_name, result in results.items():
         if result.get("status") == "failed":
             continue
@@ -1731,30 +1733,50 @@ def generate_experiment_comparison_plots(base_output_dir, results):
             scaling_path = os.path.join(
                 result["output_dir"], "entropy_scaling_analysis.json"
             )
+            scaling_data = {}
             if os.path.exists(scaling_path):
                 with open(scaling_path, "r") as f:
                     scaling_data = json.load(f)
 
-                experiment_data.append(
-                    {
-                        "name": exp_name,
-                        "model_config": result["model_config"],
-                        "dataset_type": result["dataset_type"],
-                        "model_size": result["model_size"],
-                        "final_entropy": result["final_entropy"],
-                        "scaling_data": scaling_data,
-                    }
-                )
+            # Load entropy evolution data
+            entropy_path = os.path.join(
+                result["output_dir"], "entropy_tracking_data.json"
+            )
+            if os.path.exists(entropy_path):
+                with open(entropy_path, "r") as f:
+                    entropy_tracking = json.load(f)
+                    entropy_evolution_data[exp_name] = entropy_tracking
+
+            experiment_data.append(
+                {
+                    "name": exp_name,
+                    "model_config": result["model_config"],
+                    "dataset_type": result["dataset_type"],
+                    "model_size": result["model_size"],
+                    "final_entropy": result["final_entropy"],
+                    "scaling_data": scaling_data,
+                }
+            )
         except Exception as e:
             print(f"⚠️ Could not load data for {exp_name}: {e}")
 
-    if len(experiment_data) < 2:
-        print("⚠️ Not enough successful experiments to generate comparison plots")
+    if len(experiment_data) < 1:
+        print("⚠️ No successful experiments to generate comparison plots")
         return
 
-    # Create comparison plots
+    # Generate multiple comprehensive comparison plot sets
+    generate_basic_comparison_plots(base_output_dir, experiment_data)
+    generate_entropy_evolution_comparison(
+        base_output_dir, experiment_data, entropy_evolution_data
+    )
+    generate_performance_matrix_plot(base_output_dir, experiment_data)
+    generate_detailed_analysis_plots(base_output_dir, experiment_data)
+
+
+def generate_basic_comparison_plots(base_output_dir, experiment_data):
+    """Generate basic comparison plots"""
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle("Experiment Comparison Across Models and Datasets", fontsize=16)
+    fig.suptitle("Basic Experiment Comparison Across Models and Datasets", fontsize=16)
 
     # Plot 1: Final entropy by model and dataset
     model_configs = list(set(exp["model_config"] for exp in experiment_data))
@@ -1852,11 +1874,569 @@ def generate_experiment_comparison_plots(base_output_dir, results):
     axes[1, 1].legend()
 
     plt.tight_layout()
-    comparison_plot_path = os.path.join(base_output_dir, "experiment_comparison.png")
+    comparison_plot_path = os.path.join(
+        base_output_dir, "basic_experiment_comparison.png"
+    )
     plt.savefig(comparison_plot_path, dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"📈 Experiment comparison plot saved: {comparison_plot_path}")
+    print(f"📈 Basic comparison plot saved: {comparison_plot_path}")
+
+
+def generate_entropy_evolution_comparison(
+    base_output_dir, experiment_data, entropy_evolution_data
+):
+    """Generate entropy evolution comparison across all experiments"""
+    if not entropy_evolution_data:
+        print("⚠️ No entropy evolution data available for comparison")
+        return
+
+    print("\n📈 Creating entropy evolution comparison plots...")
+
+    # Create subplot for entropy evolution comparison
+    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+    fig.suptitle("Entropy Evolution Comparison Across All Experiments", fontsize=16)
+
+    # Color schemes for different models and datasets
+    model_colors = {"gpt2_half": "red", "small_full_vocab": "blue"}
+    dataset_styles = {"openwebtext": "-", "random": "--", "constant": ":"}
+
+    # Plot 1: All entropy evolutions together
+    for exp_name, entropy_data in entropy_evolution_data.items():
+        if "entropy_total" in entropy_data["entropy_history"]:
+            try:
+                iterations = entropy_data["iteration_history"]
+                entropies = entropy_data["entropy_history"]["entropy_total"]
+
+                # Find matching experiment data for styling
+                exp_info = next(
+                    (exp for exp in experiment_data if exp["name"] == exp_name), None
+                )
+                if exp_info:
+                    model_config = exp_info["model_config"]
+                    dataset_type = exp_info["dataset_type"]
+
+                    color = model_colors.get(model_config, "gray")
+                    style = dataset_styles.get(dataset_type, "-")
+
+                    # Ensure arrays are same length
+                    min_len = min(len(iterations), len(entropies))
+                    if min_len > 0:
+                        label = f"{model_config.replace('_', ' ').title()} - {dataset_type.title()}"
+                        axes[0, 0].plot(
+                            iterations[:min_len],
+                            entropies[:min_len],
+                            color=color,
+                            linestyle=style,
+                            label=label,
+                            alpha=0.8,
+                            linewidth=2,
+                        )
+            except Exception as e:
+                print(f"⚠️ Error plotting entropy evolution for {exp_name}: {e}")
+
+    axes[0, 0].set_title("All Entropy Evolution Curves")
+    axes[0, 0].set_xlabel("Training Iteration")
+    axes[0, 0].set_ylabel("Total Parameter Entropy (bits)")
+    axes[0, 0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Plot 2: Final entropy heatmap
+    model_configs = list(set(exp["model_config"] for exp in experiment_data))
+    dataset_types = list(set(exp["dataset_type"] for exp in experiment_data))
+
+    # Create matrix data
+    entropy_matrix = np.full((len(model_configs), len(dataset_types)), np.nan)
+    for i, model in enumerate(model_configs):
+        for j, dataset in enumerate(dataset_types):
+            matching_exp = next(
+                (
+                    exp
+                    for exp in experiment_data
+                    if exp["model_config"] == model and exp["dataset_type"] == dataset
+                ),
+                None,
+            )
+            if matching_exp:
+                entropy_matrix[i, j] = matching_exp["final_entropy"]
+
+    im = axes[0, 1].imshow(entropy_matrix, cmap="viridis", aspect="auto")
+    axes[0, 1].set_title("Final Entropy Heatmap")
+    axes[0, 1].set_xlabel("Dataset Type")
+    axes[0, 1].set_ylabel("Model Configuration")
+    axes[0, 1].set_xticks(range(len(dataset_types)))
+    axes[0, 1].set_xticklabels([d.title() for d in dataset_types])
+    axes[0, 1].set_yticks(range(len(model_configs)))
+    axes[0, 1].set_yticklabels([m.replace("_", " ").title() for m in model_configs])
+
+    # Add text annotations
+    for i in range(len(model_configs)):
+        for j in range(len(dataset_types)):
+            if not np.isnan(entropy_matrix[i, j]):
+                axes[0, 1].text(
+                    j,
+                    i,
+                    f"{entropy_matrix[i, j]:.3f}",
+                    ha="center",
+                    va="center",
+                    color="white",
+                    fontweight="bold",
+                )
+
+    plt.colorbar(im, ax=axes[0, 1], label="Final Entropy (bits)")
+
+    # Plot 3: Entropy change during training
+    exp_names = [exp["name"].replace("_", "\n") for exp in experiment_data]
+    entropy_changes = []
+    for exp in experiment_data:
+        change = (
+            exp["scaling_data"].get("entropy_change", 0) if exp["scaling_data"] else 0
+        )
+        entropy_changes.append(change)
+
+    colors = ["red" if change < 0 else "green" for change in entropy_changes]
+    bars = axes[1, 0].bar(
+        range(len(exp_names)), entropy_changes, color=colors, alpha=0.7
+    )
+    axes[1, 0].set_title("Entropy Change During Training")
+    axes[1, 0].set_xlabel("Experiments")
+    axes[1, 0].set_ylabel("Entropy Change (bits)")
+    axes[1, 0].set_xticks(range(len(exp_names)))
+    axes[1, 0].set_xticklabels(exp_names, rotation=45, ha="right")
+    axes[1, 0].axhline(y=0, color="black", linestyle="--", alpha=0.5)
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Add value labels on bars
+    for bar, value in zip(bars, entropy_changes):
+        if abs(value) > 0.001:  # Only show non-zero changes
+            axes[1, 0].text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() / 2,
+                f"{value:.4f}",
+                ha="center",
+                va="center",
+                fontweight="bold",
+            )
+
+    # Plot 4: Model size vs entropy relationship
+    model_sizes = [exp["model_size"] for exp in experiment_data]
+    final_entropies = [exp["final_entropy"] for exp in experiment_data]
+
+    # Color by dataset type
+    dataset_colors = {"openwebtext": "red", "random": "blue", "constant": "green"}
+    colors = [
+        dataset_colors.get(exp["dataset_type"], "gray") for exp in experiment_data
+    ]
+
+    scatter = axes[1, 1].scatter(
+        model_sizes, final_entropies, c=colors, alpha=0.7, s=100
+    )
+    axes[1, 1].set_title("Model Size vs Final Entropy")
+    axes[1, 1].set_xlabel("Model Size (parameters)")
+    axes[1, 1].set_ylabel("Final Entropy (bits)")
+    axes[1, 1].grid(True, alpha=0.3)
+
+    # Add legend for datasets
+    from matplotlib.patches import Patch
+
+    legend_elements = [
+        Patch(facecolor=color, alpha=0.7, label=dataset.title())
+        for dataset, color in dataset_colors.items()
+        if dataset in dataset_types
+    ]
+    axes[1, 1].legend(handles=legend_elements)
+
+    # Add trend line
+    if len(model_sizes) > 1:
+        z = np.polyfit(model_sizes, final_entropies, 1)
+        p = np.poly1d(z)
+        axes[1, 1].plot(
+            model_sizes,
+            p(model_sizes),
+            "r--",
+            alpha=0.8,
+            label=f"Trend: {z[0]:.2e}x + {z[1]:.3f}",
+        )
+        axes[1, 1].legend()
+
+    plt.tight_layout()
+    evolution_comparison_path = os.path.join(
+        base_output_dir, "entropy_evolution_comparison.png"
+    )
+    plt.savefig(evolution_comparison_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"📈 Entropy evolution comparison saved: {evolution_comparison_path}")
+
+
+def generate_performance_matrix_plot(base_output_dir, experiment_data):
+    """Generate performance matrix visualization"""
+    print("\n📈 Creating performance matrix plot...")
+
+    model_configs = list(set(exp["model_config"] for exp in experiment_data))
+    dataset_types = list(set(exp["dataset_type"] for exp in experiment_data))
+
+    if len(model_configs) < 1 or len(dataset_types) < 1:
+        print("⚠️ Not enough variety in models/datasets for matrix plot")
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle("Model vs Dataset Performance Matrix", fontsize=16)
+
+    # Matrix 1: Final Entropy
+    entropy_matrix = np.full((len(model_configs), len(dataset_types)), np.nan)
+    for i, model in enumerate(model_configs):
+        for j, dataset in enumerate(dataset_types):
+            matching_exp = next(
+                (
+                    exp
+                    for exp in experiment_data
+                    if exp["model_config"] == model and exp["dataset_type"] == dataset
+                ),
+                None,
+            )
+            if matching_exp:
+                entropy_matrix[i, j] = matching_exp["final_entropy"]
+
+    im1 = axes[0].imshow(entropy_matrix, cmap="viridis", aspect="auto")
+    axes[0].set_title("Final Entropy (bits)")
+    axes[0].set_xlabel("Dataset Type")
+    axes[0].set_ylabel("Model Configuration")
+    axes[0].set_xticks(range(len(dataset_types)))
+    axes[0].set_xticklabels([d.title() for d in dataset_types])
+    axes[0].set_yticks(range(len(model_configs)))
+    axes[0].set_yticklabels([m.replace("_", " ").title() for m in model_configs])
+    plt.colorbar(im1, ax=axes[0])
+
+    # Add annotations
+    for i in range(len(model_configs)):
+        for j in range(len(dataset_types)):
+            if not np.isnan(entropy_matrix[i, j]):
+                axes[0].text(
+                    j,
+                    i,
+                    f"{entropy_matrix[i, j]:.3f}",
+                    ha="center",
+                    va="center",
+                    color="white",
+                    fontweight="bold",
+                )
+
+    # Matrix 2: Model Size
+    size_matrix = np.full((len(model_configs), len(dataset_types)), np.nan)
+    for i, model in enumerate(model_configs):
+        for j, dataset in enumerate(dataset_types):
+            matching_exp = next(
+                (
+                    exp
+                    for exp in experiment_data
+                    if exp["model_config"] == model and exp["dataset_type"] == dataset
+                ),
+                None,
+            )
+            if matching_exp:
+                size_matrix[i, j] = matching_exp["model_size"] / 1e6  # In millions
+
+    im2 = axes[1].imshow(size_matrix, cmap="plasma", aspect="auto")
+    axes[1].set_title("Model Size (M parameters)")
+    axes[1].set_xlabel("Dataset Type")
+    axes[1].set_ylabel("Model Configuration")
+    axes[1].set_xticks(range(len(dataset_types)))
+    axes[1].set_xticklabels([d.title() for d in dataset_types])
+    axes[1].set_yticks(range(len(model_configs)))
+    axes[1].set_yticklabels([m.replace("_", " ").title() for m in model_configs])
+    plt.colorbar(im2, ax=axes[1])
+
+    # Add annotations
+    for i in range(len(model_configs)):
+        for j in range(len(dataset_types)):
+            if not np.isnan(size_matrix[i, j]):
+                axes[1].text(
+                    j,
+                    i,
+                    f"{size_matrix[i, j]:.1f}M",
+                    ha="center",
+                    va="center",
+                    color="white",
+                    fontweight="bold",
+                )
+
+    # Matrix 3: Entropy per Parameter (efficiency)
+    efficiency_matrix = np.full((len(model_configs), len(dataset_types)), np.nan)
+    for i, model in enumerate(model_configs):
+        for j, dataset in enumerate(dataset_types):
+            matching_exp = next(
+                (
+                    exp
+                    for exp in experiment_data
+                    if exp["model_config"] == model and exp["dataset_type"] == dataset
+                ),
+                None,
+            )
+            if matching_exp and matching_exp["model_size"] > 0:
+                efficiency_matrix[i, j] = matching_exp["final_entropy"] / (
+                    matching_exp["model_size"] / 1e6
+                )
+
+    im3 = axes[2].imshow(efficiency_matrix, cmap="coolwarm", aspect="auto")
+    axes[2].set_title("Entropy Efficiency\n(entropy/M params)")
+    axes[2].set_xlabel("Dataset Type")
+    axes[2].set_ylabel("Model Configuration")
+    axes[2].set_xticks(range(len(dataset_types)))
+    axes[2].set_xticklabels([d.title() for d in dataset_types])
+    axes[2].set_yticks(range(len(model_configs)))
+    axes[2].set_yticklabels([m.replace("_", " ").title() for m in model_configs])
+    plt.colorbar(im3, ax=axes[2])
+
+    # Add annotations
+    for i in range(len(model_configs)):
+        for j in range(len(dataset_types)):
+            if not np.isnan(efficiency_matrix[i, j]):
+                axes[2].text(
+                    j,
+                    i,
+                    f"{efficiency_matrix[i, j]:.4f}",
+                    ha="center",
+                    va="center",
+                    color="white",
+                    fontweight="bold",
+                    fontsize=8,
+                )
+
+    plt.tight_layout()
+    matrix_path = os.path.join(base_output_dir, "performance_matrix.png")
+    plt.savefig(matrix_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"📈 Performance matrix saved: {matrix_path}")
+
+
+def generate_detailed_analysis_plots(base_output_dir, experiment_data):
+    """Generate detailed analysis plots"""
+    print("\n📈 Creating detailed analysis plots...")
+
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    fig.suptitle("Detailed Cross-Experiment Analysis", fontsize=16)
+
+    # Plot 1: Final entropy distribution
+    final_entropies = [exp["final_entropy"] for exp in experiment_data]
+    axes[0, 0].hist(
+        final_entropies,
+        bins=min(10, len(set(final_entropies))),
+        alpha=0.7,
+        color="skyblue",
+        edgecolor="black",
+    )
+    axes[0, 0].set_title("Final Entropy Distribution")
+    axes[0, 0].set_xlabel("Final Entropy (bits)")
+    axes[0, 0].set_ylabel("Frequency")
+    if len(final_entropies) > 0:
+        axes[0, 0].axvline(
+            np.mean(final_entropies),
+            color="red",
+            linestyle="--",
+            label=f"Mean: {np.mean(final_entropies):.4f}",
+        )
+        axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Plot 2: Model size distribution
+    model_sizes = [exp["model_size"] / 1e6 for exp in experiment_data]  # In millions
+    axes[0, 1].hist(
+        model_sizes,
+        bins=min(10, len(set(model_sizes))),
+        alpha=0.7,
+        color="lightgreen",
+        edgecolor="black",
+    )
+    axes[0, 1].set_title("Model Size Distribution")
+    axes[0, 1].set_xlabel("Model Size (M parameters)")
+    axes[0, 1].set_ylabel("Frequency")
+    if len(model_sizes) > 0:
+        axes[0, 1].axvline(
+            np.mean(model_sizes),
+            color="red",
+            linestyle="--",
+            label=f"Mean: {np.mean(model_sizes):.1f}M",
+        )
+        axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Plot 3: Dataset type comparison
+    dataset_types = list(set(exp["dataset_type"] for exp in experiment_data))
+    if len(dataset_types) > 1 and len(experiment_data) > 0:
+        dataset_entropies = {}
+        for dataset in dataset_types:
+            dataset_entropies[dataset] = [
+                exp["final_entropy"]
+                for exp in experiment_data
+                if exp["dataset_type"] == dataset
+            ]
+
+        box_data = [
+            dataset_entropies[dataset]
+            for dataset in dataset_types
+            if dataset_entropies[dataset]
+        ]
+        if box_data:
+            box_plot = axes[0, 2].boxplot(
+                box_data,
+                labels=[d.title() for d in dataset_types if dataset_entropies[d]],
+            )
+            axes[0, 2].set_title("Entropy by Dataset Type")
+            axes[0, 2].set_xlabel("Dataset Type")
+            axes[0, 2].set_ylabel("Final Entropy (bits)")
+            axes[0, 2].grid(True, alpha=0.3)
+        else:
+            axes[0, 2].text(
+                0.5,
+                0.5,
+                "No data\nfor comparison",
+                ha="center",
+                va="center",
+                transform=axes[0, 2].transAxes,
+            )
+    else:
+        axes[0, 2].text(
+            0.5,
+            0.5,
+            "Insufficient\ndata variety",
+            ha="center",
+            va="center",
+            transform=axes[0, 2].transAxes,
+        )
+
+    # Plot 4: Model config comparison
+    model_configs = list(set(exp["model_config"] for exp in experiment_data))
+    if len(model_configs) > 1 and len(experiment_data) > 0:
+        model_entropies = {}
+        for model in model_configs:
+            model_entropies[model] = [
+                exp["final_entropy"]
+                for exp in experiment_data
+                if exp["model_config"] == model
+            ]
+
+        box_data = [
+            model_entropies[model] for model in model_configs if model_entropies[model]
+        ]
+        if box_data:
+            axes[1, 0].boxplot(
+                box_data,
+                labels=[
+                    m.replace("_", "\n") for m in model_configs if model_entropies[m]
+                ],
+            )
+            axes[1, 0].set_title("Entropy by Model Configuration")
+            axes[1, 0].set_xlabel("Model Configuration")
+            axes[1, 0].set_ylabel("Final Entropy (bits)")
+            axes[1, 0].grid(True, alpha=0.3)
+        else:
+            axes[1, 0].text(
+                0.5,
+                0.5,
+                "No data\nfor comparison",
+                ha="center",
+                va="center",
+                transform=axes[1, 0].transAxes,
+            )
+    else:
+        axes[1, 0].text(
+            0.5,
+            0.5,
+            "Insufficient\nmodel variety",
+            ha="center",
+            va="center",
+            transform=axes[1, 0].transAxes,
+        )
+
+    # Plot 5: Entropy vs Model Size correlation
+    model_sizes_full = [exp["model_size"] for exp in experiment_data]
+    final_entropies_full = [exp["final_entropy"] for exp in experiment_data]
+
+    if len(model_sizes_full) > 1:
+        # Calculate correlation
+        correlation = np.corrcoef(model_sizes_full, final_entropies_full)[0, 1]
+
+        axes[1, 1].scatter(model_sizes_full, final_entropies_full, alpha=0.7, s=100)
+        axes[1, 1].set_title(f"Model Size vs Entropy\n(correlation: {correlation:.3f})")
+        axes[1, 1].set_xlabel("Model Size (parameters)")
+        axes[1, 1].set_ylabel("Final Entropy (bits)")
+        axes[1, 1].grid(True, alpha=0.3)
+
+        # Add trend line
+        z = np.polyfit(model_sizes_full, final_entropies_full, 1)
+        p = np.poly1d(z)
+        axes[1, 1].plot(model_sizes_full, p(model_sizes_full), "r--", alpha=0.8)
+    else:
+        axes[1, 1].text(
+            0.5,
+            0.5,
+            "Insufficient\ndata for\ncorrelation",
+            ha="center",
+            va="center",
+            transform=axes[1, 1].transAxes,
+        )
+        correlation = 0.0
+
+    # Plot 6: Summary statistics table
+    axes[1, 2].axis("off")
+
+    # Create summary statistics
+    summary_stats = [
+        ["Metric", "Value"],
+        ["Total Experiments", str(len(experiment_data))],
+        ["Model Configurations", str(len(model_configs))],
+        ["Dataset Types", str(len(dataset_types))],
+        ["", ""],
+        ["Entropy Statistics", ""],
+    ]
+
+    if final_entropies:
+        summary_stats.extend(
+            [
+                ["Mean Final Entropy", f"{np.mean(final_entropies):.6f} bits"],
+                ["Std Final Entropy", f"{np.std(final_entropies):.6f} bits"],
+                ["Min Final Entropy", f"{np.min(final_entropies):.6f} bits"],
+                ["Max Final Entropy", f"{np.max(final_entropies):.6f} bits"],
+            ]
+        )
+
+    summary_stats.extend(
+        [
+            ["", ""],
+            ["Model Size Statistics", ""],
+        ]
+    )
+
+    if model_sizes:
+        summary_stats.extend(
+            [
+                ["Mean Model Size", f"{np.mean(model_sizes):.1f}M params"],
+                ["Std Model Size", f"{np.std(model_sizes):.1f}M params"],
+                ["Size-Entropy Correlation", f"{correlation:.3f}"],
+            ]
+        )
+
+    # Create table
+    table = axes[1, 2].table(
+        cellText=summary_stats,
+        cellColours=[["lightgray", "lightgray"]]
+        + [["white", "white"]] * (len(summary_stats) - 1),
+        cellLoc="left",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
+    axes[1, 2].set_title("Summary Statistics")
+
+    plt.tight_layout()
+    detailed_path = os.path.join(base_output_dir, "detailed_analysis.png")
+    plt.savefig(detailed_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"📈 Detailed analysis plot saved: {detailed_path}")
 
 
 def print_final_summary(results, base_output_dir, start_time):

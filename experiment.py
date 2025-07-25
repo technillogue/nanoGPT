@@ -1179,27 +1179,33 @@ def train_model(model_config, dataset_type, output_dir, max_iters=50000):
 
     print(f"\n✅ Training completed! Best validation loss: {best_val_loss:.4f}")
 
-    # Save final entropy plot
-    plot_path = os.path.join(output_dir, "entropy_evolution.png")
-    entropy_tracker.plot_entropy_evolution(save_path=plot_path, show_layers=False)
-
-    # Save entropy scaling analysis
-    scaling_results = analyze_entropy_scaling(entropy_tracker)
-    with open(os.path.join(output_dir, "entropy_scaling_analysis.json"), "w") as f:
-        json.dump(scaling_results, f, indent=2)
-
-    print(
-        f"💾 Entropy scaling analysis saved: {output_dir}/entropy_scaling_analysis.json"
-    )
+    # Save entropy scaling analysis first (data)
+    try:
+        scaling_results = analyze_entropy_scaling(entropy_tracker)
+        with open(os.path.join(output_dir, "entropy_scaling_analysis.json"), "w") as f:
+            json.dump(scaling_results, f, indent=2)
+        print(f"💾 Entropy scaling analysis saved: {output_dir}/entropy_scaling_analysis.json")
+    except Exception as e:
+        print(f"❌ Error saving entropy scaling analysis: {e}")
 
     # Load best model for analysis
-    checkpoint = torch.load(
-        os.path.join(output_dir, "best_model.pt"), map_location=device
-    )
-    model.load_state_dict(checkpoint["model"])
+    try:
+        checkpoint = torch.load(
+            os.path.join(output_dir, "best_model.pt"), map_location=device
+        )
+        model.load_state_dict(checkpoint["model"])
+        
+        # Perform detailed analysis of the trained model
+        analyze_trained_model(model, data_loader, device, ctx, output_dir)
+    except Exception as e:
+        print(f"❌ Error loading model or performing analysis: {e}")
 
-    # Perform detailed analysis of the trained model
-    analyze_trained_model(model, data_loader, device, ctx, output_dir)
+    # Save plots at the very end after all data is written
+    try:
+        plot_path = os.path.join(output_dir, "entropy_evolution.png")
+        entropy_tracker.plot_entropy_evolution(save_path=plot_path, show_layers=False)
+    except Exception as e:
+        print(f"❌ Error creating final entropy plot: {e}")
 
     return model, entropy_tracker
 

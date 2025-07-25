@@ -28,6 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+from entropy_utils import EntropyTracker
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -43,6 +44,11 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
+# entropy monitoring
+entropy_log = True # enable entropy tracking by default
+entropy_log_interval = 1000 # log entropy every N iterations
+entropy_bins = 100 # number of bins for entropy calculation
+entropy_track_layers = False # whether to track layer-wise entropy (expensive)
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
@@ -241,6 +247,22 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
+# entropy tracking initialization
+entropy_tracker = None
+if entropy_log and master_process:
+    entropy_tracker = EntropyTracker(num_bins=entropy_bins)
+    print(f"Entropy tracking enabled with {entropy_bins} bins, logging every {entropy_log_interval} iterations")
+    
+    # restore entropy history if resuming from checkpoint
+    if init_from == 'resume':
+        ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+        if os.path.exists(ckpt_path):
+            resume_checkpoint = torch.load(ckpt_path, map_location=device)
+            if 'entropy_history' in resume_checkpoint and 'entropy_iterations' in resume_checkpoint:
+                entropy_tracker.entropy_history = resume_checkpoint['entropy_history']
+                entropy_tracker.iteration_history = resume_checkpoint['entropy_iterations']
+                print(f"Restored entropy history with {len(entropy_tracker.iteration_history)} logged iterations")
+
 # logging
 if wandb_log and master_process:
     import wandb
@@ -263,14 +285,27 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        
+        # log entropy at evaluation intervals
+        if entropy_tracker is not None:
+            entropy_tracker.log_entropy(raw_model, iter_num, track_layers=entropy_track_layers)
+            latest_entropy = entropy_tracker.get_latest_entropy()
+            print(f"step {iter_num}: total entropy {latest_entropy.get('entropy_total', 'N/A'):.4f} bits")
+        
         if wandb_log:
-            wandb.log({
+            log_data = {
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-            })
+            }
+            # add entropy data to wandb logging
+            if entropy_tracker is not None:
+                latest_entropy = entropy_tracker.get_latest_entropy()
+                for key, value in latest_entropy.items():
+                    log_data[key] = value
+            wandb.log(log_data)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -282,6 +317,10 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
+                # save entropy tracking data
+                if entropy_tracker is not None:
+                    checkpoint['entropy_history'] = dict(entropy_tracker.entropy_history)
+                    checkpoint['entropy_iterations'] = entropy_tracker.iteration_history
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
     if iter_num == 0 and eval_only:
@@ -325,12 +364,41 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        
+        # log entropy at specified intervals
+        if entropy_tracker is not None and iter_num % entropy_log_interval == 0 and iter_num > 0:
+            entropy_tracker.log_entropy(raw_model, iter_num, track_layers=entropy_track_layers)
+            latest_entropy = entropy_tracker.get_latest_entropy()
+            print(f"iter {iter_num}: entropy update - total: {latest_entropy.get('entropy_total', 'N/A'):.4f} bits")
     iter_num += 1
     local_iter_num += 1
 
     # termination conditions
     if iter_num > max_iters:
         break
+
+# save final entropy analysis and plots
+if entropy_tracker is not None and master_process:
+    from entropy_utils import analyze_entropy_scaling
+    
+    # save final entropy plot
+    plot_path = os.path.join(out_dir, 'entropy_evolution.png')
+    entropy_tracker.plot_entropy_evolution(save_path=plot_path, show_layers=entropy_track_layers)
+    
+    # analyze scaling properties
+    scaling_results = analyze_entropy_scaling(entropy_tracker)
+    print("=" * 50)
+    print("ENTROPY SCALING ANALYSIS")
+    print("=" * 50)
+    for key, value in scaling_results.items():
+        print(f"{key}: {value:.6f}")
+    
+    # save scaling analysis to file
+    import json
+    scaling_path = os.path.join(out_dir, 'entropy_scaling_analysis.json')
+    with open(scaling_path, 'w') as f:
+        json.dump(scaling_results, f, indent=2)
+    print(f"Entropy scaling analysis saved to {scaling_path}")
 
 if ddp:
     destroy_process_group()

@@ -590,11 +590,21 @@ def analyze_entropy_scaling(entropy_tracker):
     entropies = np.array(entropy_tracker.entropy_history["entropy_total"])
     iterations = np.array(entropy_tracker.iteration_history)
 
+    # Ensure arrays have the same length
+    min_len = min(len(entropies), len(iterations))
+    entropies = entropies[:min_len]
+    iterations = iterations[:min_len]
+
     # Calculate entropy change rate
-    if len(entropies) > 1:
-        entropy_change_rate = np.diff(entropies) / np.diff(iterations)
-        mean_change_rate = np.mean(entropy_change_rate)
-        std_change_rate = np.std(entropy_change_rate)
+    if len(entropies) > 1 and len(iterations) > 1:
+        try:
+            entropy_change_rate = np.diff(entropies) / np.diff(iterations)
+            mean_change_rate = np.mean(entropy_change_rate)
+            std_change_rate = np.std(entropy_change_rate)
+        except Exception as e:
+            print(f"Warning: Could not calculate entropy change rate: {e}")
+            mean_change_rate = 0.0
+            std_change_rate = 0.0
     else:
         mean_change_rate = 0.0
         std_change_rate = 0.0
@@ -1322,13 +1332,13 @@ def train_model(model_config, dataset_type, output_dir, max_iters=50000):
 
     # Save all data files first (no plotting)
     print("\n💾 Saving all analysis data...")
-    
+
     # Save raw entropy tracking data
     try:
         entropy_data = {
             "entropy_history": dict(entropy_tracker.entropy_history),
             "iteration_history": entropy_tracker.iteration_history,
-            "num_bins": entropy_tracker.num_bins
+            "num_bins": entropy_tracker.num_bins,
         }
         with open(os.path.join(output_dir, "entropy_tracking_data.json"), "w") as f:
             json.dump(entropy_data, f, indent=2)
@@ -1341,22 +1351,33 @@ def train_model(model_config, dataset_type, output_dir, max_iters=50000):
         scaling_results = analyze_entropy_scaling(entropy_tracker)
         with open(os.path.join(output_dir, "entropy_scaling_analysis.json"), "w") as f:
             json.dump(scaling_results, f, indent=2)
-        print(f"💾 Entropy scaling analysis saved: {output_dir}/entropy_scaling_analysis.json")
+        print(
+            f"💾 Entropy scaling analysis saved: {output_dir}/entropy_scaling_analysis.json"
+        )
     except Exception as e:
         print(f"❌ Error saving entropy scaling analysis: {e}")
 
     # Load best model for analysis (data only, no plots)
     try:
-        checkpoint = torch.load(
-            os.path.join(output_dir, "best_model.pt"), map_location=device
-        )
-        model.load_state_dict(checkpoint["model"])
-        
-        # Perform detailed analysis of the trained model (data only)
-        print("🔍 Performing model analysis (data only)...")
-        analyze_trained_model_data_only(model, data_loader, device, ctx, output_dir)
+        checkpoint_path = os.path.join(output_dir, "best_model.pt")
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(
+                checkpoint_path, map_location=device, weights_only=False
+            )
+            model.load_state_dict(checkpoint["model"])
+
+            # Perform detailed analysis of the trained model (data only)
+            print("🔍 Performing model analysis (data only)...")
+            analyze_trained_model_data_only(model, data_loader, device, ctx, output_dir)
+        else:
+            print(
+                f"⚠️ No checkpoint found at {checkpoint_path}, skipping model analysis"
+            )
     except Exception as e:
         print(f"❌ Error loading model or performing analysis: {e}")
+        import traceback
+
+        traceback.print_exc()
 
     print("✅ All data saved successfully! Plots will be generated separately.")
     return model, entropy_tracker
@@ -1385,44 +1406,76 @@ def print_experiment_header(
 def generate_all_plots(base_output_dir, results):
     """Generate all plots from saved data after all experiments complete"""
     print(f"\n{'🎨 GENERATING ALL PLOTS FROM SAVED DATA':=^80}")
-    
+
     for experiment_name, result in results.items():
-        if result.get('status') == 'failed':
+        if result.get("status") == "failed":
             print(f"⚠️ Skipping plots for failed experiment: {experiment_name}")
             continue
-            
-        output_dir = result['output_dir']
+
+        output_dir = result["output_dir"]
         print(f"\n🖼️ Generating plots for {experiment_name}...")
-        
+
         # Generate entropy evolution plot
         try:
             entropy_data_path = os.path.join(output_dir, "entropy_tracking_data.json")
             if os.path.exists(entropy_data_path):
                 # Load entropy data
-                with open(entropy_data_path, 'r') as f:
+                with open(entropy_data_path, "r") as f:
                     entropy_data = json.load(f)
-                
+
                 # Recreate entropy tracker from saved data
-                entropy_tracker = EntropyTracker(num_bins=entropy_data.get('num_bins', 100))
-                entropy_tracker.entropy_history = entropy_data['entropy_history']
-                entropy_tracker.iteration_history = entropy_data['iteration_history']
-                
+                entropy_tracker = EntropyTracker(
+                    num_bins=entropy_data.get("num_bins", 100)
+                )
+                entropy_tracker.entropy_history = entropy_data["entropy_history"]
+                entropy_tracker.iteration_history = entropy_data["iteration_history"]
+
+                # Fix array length mismatch by ensuring both arrays have same length
+                if "entropy_total" in entropy_tracker.entropy_history:
+                    entropy_len = len(entropy_tracker.entropy_history["entropy_total"])
+                    iter_len = len(entropy_tracker.iteration_history)
+                    min_len = min(entropy_len, iter_len)
+
+                    # Truncate both arrays to the same length
+                    entropy_tracker.iteration_history = (
+                        entropy_tracker.iteration_history[:min_len]
+                    )
+                    for key in entropy_tracker.entropy_history:
+                        if isinstance(entropy_tracker.entropy_history[key], list):
+                            entropy_tracker.entropy_history[key] = (
+                                entropy_tracker.entropy_history[key][:min_len]
+                            )
+
+                    print(
+                        f"   Fixed array lengths: entropy={entropy_len}, iter={iter_len}, using={min_len}"
+                    )
+
                 # Generate entropy evolution plot
                 plot_path = os.path.join(output_dir, "entropy_evolution.png")
-                entropy_tracker.plot_entropy_evolution(save_path=plot_path, show_layers=False)
-                
+                entropy_tracker.plot_entropy_evolution(
+                    save_path=plot_path, show_layers=False
+                )
+
                 # Also generate a detailed version with layers if layer data exists
-                layer_keys = [k for k in entropy_tracker.entropy_history.keys() if k.startswith("entropy_layer_")]
+                layer_keys = [
+                    k
+                    for k in entropy_tracker.entropy_history.keys()
+                    if k.startswith("entropy_layer_")
+                ]
                 if layer_keys:
-                    detailed_plot_path = os.path.join(output_dir, "entropy_evolution_detailed.png")
-                    entropy_tracker.plot_entropy_evolution(save_path=detailed_plot_path, show_layers=True)
-                
+                    detailed_plot_path = os.path.join(
+                        output_dir, "entropy_evolution_detailed.png"
+                    )
+                    entropy_tracker.plot_entropy_evolution(
+                        save_path=detailed_plot_path, show_layers=True
+                    )
+
             else:
                 print(f"⚠️ No entropy tracking data found for {experiment_name}")
-                
+
         except Exception as e:
             print(f"❌ Error generating entropy plots for {experiment_name}: {e}")
-        
+
         # Generate comparative plots if we have parameter analysis data
         try:
             param_analysis_path = os.path.join(output_dir, "parameter_analysis.json")
@@ -1431,177 +1484,230 @@ def generate_all_plots(base_output_dir, results):
             else:
                 print(f"⚠️ No parameter analysis data found for {experiment_name}")
         except Exception as e:
-            print(f"❌ Error generating parameter analysis plots for {experiment_name}: {e}")
-    
+            print(
+                f"❌ Error generating parameter analysis plots for {experiment_name}: {e}"
+            )
+
     # Generate overall comparison plots
     try:
         generate_experiment_comparison_plots(base_output_dir, results)
     except Exception as e:
         print(f"❌ Error generating comparison plots: {e}")
-    
+
     print(f"\n✅ All plots generated successfully!")
 
 
 def generate_parameter_analysis_plots(output_dir):
     """Generate plots from parameter analysis data"""
     param_analysis_path = os.path.join(output_dir, "parameter_analysis.json")
-    
-    with open(param_analysis_path, 'r') as f:
+
+    with open(param_analysis_path, "r") as f:
         param_data = json.load(f)
-    
-    entropies = param_data['parameter_entropies']
-    
+
+    entropies = param_data["parameter_entropies"]
+
     # Create parameter entropy bar plot
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
+
     # Bar plot of different entropy components
-    component_keys = [k for k in entropies.keys() if not k.startswith('entropy_layer_')]
+    component_keys = [k for k in entropies.keys() if not k.startswith("entropy_layer_")]
     if component_keys:
-        labels = [k.replace('entropy_', '').replace('_', ' ').title() for k in component_keys]
+        labels = [
+            k.replace("entropy_", "").replace("_", " ").title() for k in component_keys
+        ]
         values = [entropies[k] for k in component_keys]
-        
-        bars = ax1.bar(labels, values, alpha=0.7, color='skyblue', edgecolor='black')
-        ax1.set_title('Parameter Entropy by Component')
-        ax1.set_ylabel('Entropy (bits)')
-        ax1.tick_params(axis='x', rotation=45)
-        
+
+        bars = ax1.bar(labels, values, alpha=0.7, color="skyblue", edgecolor="black")
+        ax1.set_title("Parameter Entropy by Component")
+        ax1.set_ylabel("Entropy (bits)")
+        ax1.tick_params(axis="x", rotation=45)
+
         # Add value labels on bars
         for bar, value in zip(bars, values):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-                    f'{value:.4f}', ha='center', va='bottom', fontsize=10)
-    
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.001,
+                f"{value:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+            )
+
     # Layer entropy plot if available
-    layer_keys = sorted([k for k in entropies.keys() if k.startswith('entropy_layer_')],
-                       key=lambda x: int(x.replace('entropy_layer_', '')))
+    layer_keys = sorted(
+        [k for k in entropies.keys() if k.startswith("entropy_layer_")],
+        key=lambda x: int(x.replace("entropy_layer_", "")),
+    )
     if layer_keys:
-        layer_nums = [int(k.replace('entropy_layer_', '')) for k in layer_keys]
+        layer_nums = [int(k.replace("entropy_layer_", "")) for k in layer_keys]
         layer_values = [entropies[k] for k in layer_keys]
-        
-        ax2.plot(layer_nums, layer_values, 'o-', linewidth=2, markersize=6, color='orange')
-        ax2.set_title('Entropy by Layer')
-        ax2.set_xlabel('Layer Number')
-        ax2.set_ylabel('Entropy (bits)')
+
+        ax2.plot(
+            layer_nums, layer_values, "o-", linewidth=2, markersize=6, color="orange"
+        )
+        ax2.set_title("Entropy by Layer")
+        ax2.set_xlabel("Layer Number")
+        ax2.set_ylabel("Entropy (bits)")
         ax2.grid(True, alpha=0.3)
     else:
-        ax2.text(0.5, 0.5, 'No layer data available', ha='center', va='center', transform=ax2.transAxes)
-        ax2.set_title('Layer Entropy (No Data)')
-    
+        ax2.text(
+            0.5,
+            0.5,
+            "No layer data available",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+        )
+        ax2.set_title("Layer Entropy (No Data)")
+
     plt.tight_layout()
     plot_path = os.path.join(output_dir, "parameter_entropy_analysis.png")
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
-    
+
     print(f"📊 Parameter analysis plot saved: {plot_path}")
 
 
 def generate_experiment_comparison_plots(base_output_dir, results):
     """Generate comparison plots across all experiments"""
     print("\n📈 Generating experiment comparison plots...")
-    
+
     # Collect data from all successful experiments
     experiment_data = []
     for exp_name, result in results.items():
-        if result.get('status') == 'failed':
+        if result.get("status") == "failed":
             continue
-            
+
         try:
             # Load entropy scaling data
-            scaling_path = os.path.join(result['output_dir'], "entropy_scaling_analysis.json")
+            scaling_path = os.path.join(
+                result["output_dir"], "entropy_scaling_analysis.json"
+            )
             if os.path.exists(scaling_path):
-                with open(scaling_path, 'r') as f:
+                with open(scaling_path, "r") as f:
                     scaling_data = json.load(f)
-                
-                experiment_data.append({
-                    'name': exp_name,
-                    'model_config': result['model_config'],
-                    'dataset_type': result['dataset_type'],
-                    'model_size': result['model_size'],
-                    'final_entropy': result['final_entropy'],
-                    'scaling_data': scaling_data
-                })
+
+                experiment_data.append(
+                    {
+                        "name": exp_name,
+                        "model_config": result["model_config"],
+                        "dataset_type": result["dataset_type"],
+                        "model_size": result["model_size"],
+                        "final_entropy": result["final_entropy"],
+                        "scaling_data": scaling_data,
+                    }
+                )
         except Exception as e:
             print(f"⚠️ Could not load data for {exp_name}: {e}")
-    
+
     if len(experiment_data) < 2:
         print("⚠️ Not enough successful experiments to generate comparison plots")
         return
-    
+
     # Create comparison plots
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle('Experiment Comparison Across Models and Datasets', fontsize=16)
-    
+    fig.suptitle("Experiment Comparison Across Models and Datasets", fontsize=16)
+
     # Plot 1: Final entropy by model and dataset
-    model_configs = list(set(exp['model_config'] for exp in experiment_data))
-    dataset_types = list(set(exp['dataset_type'] for exp in experiment_data))
-    
+    model_configs = list(set(exp["model_config"] for exp in experiment_data))
+    dataset_types = list(set(exp["dataset_type"] for exp in experiment_data))
+
     for i, model_config in enumerate(model_configs):
-        model_data = [exp for exp in experiment_data if exp['model_config'] == model_config]
-        datasets = [exp['dataset_type'] for exp in model_data]
-        entropies = [exp['final_entropy'] for exp in model_data]
-        
+        model_data = [
+            exp for exp in experiment_data if exp["model_config"] == model_config
+        ]
+        datasets = [exp["dataset_type"] for exp in model_data]
+        entropies = [exp["final_entropy"] for exp in model_data]
+
         x_pos = np.arange(len(datasets)) + i * 0.35
-        axes[0, 0].bar(x_pos, entropies, 0.35, label=model_config.replace('_', ' ').title(), alpha=0.8)
-    
-    axes[0, 0].set_title('Final Entropy by Model and Dataset')
-    axes[0, 0].set_xlabel('Dataset Type')
-    axes[0, 0].set_ylabel('Final Entropy (bits)')
+        axes[0, 0].bar(
+            x_pos,
+            entropies,
+            0.35,
+            label=model_config.replace("_", " ").title(),
+            alpha=0.8,
+        )
+
+    axes[0, 0].set_title("Final Entropy by Model and Dataset")
+    axes[0, 0].set_xlabel("Dataset Type")
+    axes[0, 0].set_ylabel("Final Entropy (bits)")
     axes[0, 0].set_xticks(np.arange(len(dataset_types)) + 0.175)
     axes[0, 0].set_xticklabels([d.title() for d in dataset_types])
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
-    
+
     # Plot 2: Model size vs final entropy
-    model_sizes = [exp['model_size'] for exp in experiment_data]
-    final_entropies = [exp['final_entropy'] for exp in experiment_data]
-    colors = ['red' if 'openwebtext' in exp['dataset_type'] else 'blue' if 'random' in exp['dataset_type'] else 'green' 
-             for exp in experiment_data]
-    
-    scatter = axes[0, 1].scatter(model_sizes, final_entropies, c=colors, alpha=0.7, s=100)
-    axes[0, 1].set_title('Model Size vs Final Entropy')
-    axes[0, 1].set_xlabel('Model Size (parameters)')
-    axes[0, 1].set_ylabel('Final Entropy (bits)')
+    model_sizes = [exp["model_size"] for exp in experiment_data]
+    final_entropies = [exp["final_entropy"] for exp in experiment_data]
+    colors = [
+        "red"
+        if "openwebtext" in exp["dataset_type"]
+        else "blue"
+        if "random" in exp["dataset_type"]
+        else "green"
+        for exp in experiment_data
+    ]
+
+    scatter = axes[0, 1].scatter(
+        model_sizes, final_entropies, c=colors, alpha=0.7, s=100
+    )
+    axes[0, 1].set_title("Model Size vs Final Entropy")
+    axes[0, 1].set_xlabel("Model Size (parameters)")
+    axes[0, 1].set_ylabel("Final Entropy (bits)")
     axes[0, 1].grid(True, alpha=0.3)
-    
+
     # Add legend for colors
     from matplotlib.patches import Patch
-    legend_elements = [Patch(facecolor='red', alpha=0.7, label='OpenWebText'),
-                      Patch(facecolor='blue', alpha=0.7, label='Random'),
-                      Patch(facecolor='green', alpha=0.7, label='Constant')]
+
+    legend_elements = [
+        Patch(facecolor="red", alpha=0.7, label="OpenWebText"),
+        Patch(facecolor="blue", alpha=0.7, label="Random"),
+        Patch(facecolor="green", alpha=0.7, label="Constant"),
+    ]
     axes[0, 1].legend(handles=legend_elements)
-    
+
     # Plot 3: Entropy change over training
-    entropy_changes = [exp['scaling_data'].get('entropy_change', 0) for exp in experiment_data]
-    exp_names = [exp['name'].replace('_', '\n') for exp in experiment_data]
-    
-    bars = axes[1, 0].bar(range(len(exp_names)), entropy_changes, alpha=0.7, 
-                         color=['red' if change > 0 else 'blue' for change in entropy_changes])
-    axes[1, 0].set_title('Entropy Change During Training')
-    axes[1, 0].set_xlabel('Experiments')
-    axes[1, 0].set_ylabel('Entropy Change (bits)')
+    entropy_changes = [
+        exp["scaling_data"].get("entropy_change", 0) for exp in experiment_data
+    ]
+    exp_names = [exp["name"].replace("_", "\n") for exp in experiment_data]
+
+    bars = axes[1, 0].bar(
+        range(len(exp_names)),
+        entropy_changes,
+        alpha=0.7,
+        color=["red" if change > 0 else "blue" for change in entropy_changes],
+    )
+    axes[1, 0].set_title("Entropy Change During Training")
+    axes[1, 0].set_xlabel("Experiments")
+    axes[1, 0].set_ylabel("Entropy Change (bits)")
     axes[1, 0].set_xticks(range(len(exp_names)))
-    axes[1, 0].set_xticklabels(exp_names, rotation=45, ha='right')
-    axes[1, 0].axhline(y=0, color='black', linestyle='--', alpha=0.5)
+    axes[1, 0].set_xticklabels(exp_names, rotation=45, ha="right")
+    axes[1, 0].axhline(y=0, color="black", linestyle="--", alpha=0.5)
     axes[1, 0].grid(True, alpha=0.3)
-    
+
     # Plot 4: Distribution of final entropies
-    axes[1, 1].hist(final_entropies, bins=10, alpha=0.7, color='purple', edgecolor='black')
-    axes[1, 1].set_title('Distribution of Final Entropies')
-    axes[1, 1].set_xlabel('Final Entropy (bits)')
-    axes[1, 1].set_ylabel('Frequency')
+    axes[1, 1].hist(
+        final_entropies, bins=10, alpha=0.7, color="purple", edgecolor="black"
+    )
+    axes[1, 1].set_title("Distribution of Final Entropies")
+    axes[1, 1].set_xlabel("Final Entropy (bits)")
+    axes[1, 1].set_ylabel("Frequency")
     axes[1, 1].grid(True, alpha=0.3)
-    
+
     # Add statistics
     mean_entropy = np.mean(final_entropies)
     std_entropy = np.std(final_entropies)
-    axes[1, 1].axvline(mean_entropy, color='red', linestyle='--', 
-                      label=f'Mean: {mean_entropy:.4f}')
+    axes[1, 1].axvline(
+        mean_entropy, color="red", linestyle="--", label=f"Mean: {mean_entropy:.4f}"
+    )
     axes[1, 1].legend()
-    
+
     plt.tight_layout()
     comparison_plot_path = os.path.join(base_output_dir, "experiment_comparison.png")
-    plt.savefig(comparison_plot_path, dpi=300, bbox_inches='tight')
+    plt.savefig(comparison_plot_path, dpi=300, bbox_inches="tight")
     plt.close()
-    
+
     print(f"📈 Experiment comparison plot saved: {comparison_plot_path}")
 
 
@@ -1728,18 +1834,22 @@ def main():
         # Check if experiment already completed (for resuming)
         checkpoint_path = os.path.join(output_dir, "best_model.pt")
         if os.path.exists(checkpoint_path):
-            print(f"🔄 Found existing checkpoint for {experiment_name}, loading results...")
+            print(
+                f"🔄 Found existing checkpoint for {experiment_name}, loading results..."
+            )
             try:
                 # Load existing results
-                checkpoint = torch.load(checkpoint_path, map_location='cpu')
-                
+                checkpoint = torch.load(
+                    checkpoint_path, map_location="cpu", weights_only=False
+                )
+
                 # Create a minimal entropy tracker from saved data
                 entropy_tracker = EntropyTracker(num_bins=100)
-                if 'entropy_history' in checkpoint:
-                    entropy_tracker.entropy_history = checkpoint['entropy_history']
-                if 'entropy_iterations' in checkpoint:
-                    entropy_tracker.iteration_history = checkpoint['entropy_iterations']
-                
+                if "entropy_history" in checkpoint:
+                    entropy_tracker.entropy_history = checkpoint["entropy_history"]
+                if "entropy_iterations" in checkpoint:
+                    entropy_tracker.iteration_history = checkpoint["entropy_iterations"]
+
                 # Store results from existing checkpoint
                 results[experiment_name] = {
                     "model_config": model_config,
@@ -1748,13 +1858,14 @@ def main():
                     "final_entropy": entropy_tracker.get_latest_entropy().get(
                         "entropy_total", 0.0
                     ),
-                    "model_size": checkpoint.get('model_args', {}).get('n_embd', 0) * checkpoint.get('model_args', {}).get('n_layer', 0),
-                    "best_val_loss": checkpoint.get('best_val_loss', float("inf")),
+                    "model_size": checkpoint.get("model_args", {}).get("n_embd", 0)
+                    * checkpoint.get("model_args", {}).get("n_layer", 0),
+                    "best_val_loss": checkpoint.get("best_val_loss", float("inf")),
                 }
-                
+
                 print(f"✅ Experiment {i}/{len(experiments)} loaded from checkpoint!")
                 continue
-                
+
             except Exception as e:
                 print(f"⚠️ Warning: Could not load checkpoint {checkpoint_path}: {e}")
                 print("Starting fresh training...")
@@ -1785,8 +1896,9 @@ def main():
         except Exception as e:
             print(f"❌ Error in experiment {experiment_name}: {e}")
             import traceback
+
             traceback.print_exc()
-            
+
             # Save partial results with error info
             results[experiment_name] = {
                 "model_config": model_config,
@@ -1796,10 +1908,12 @@ def main():
                 "model_size": 0,
                 "best_val_loss": float("inf"),
                 "error": str(e),
-                "status": "failed"
+                "status": "failed",
             }
-            
-            print(f"⚠️ Experiment {i}/{len(experiments)} failed, continuing with next experiment...")
+
+            print(
+                f"⚠️ Experiment {i}/{len(experiments)} failed, continuing with next experiment..."
+            )
             continue
 
     # Save overall results summary
@@ -1819,16 +1933,16 @@ def main():
 
     with open(os.path.join(base_output_dir, "experiment_summary.json"), "w") as f:
         json.dump(summary_data, f, indent=2)
-    
+
     print("✅ All experiment data saved successfully!")
-    
+
     # Generate all plots from saved data
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Now generating all plots from the saved data...")
-    print("="*80)
-    
+    print("=" * 80)
+
     generate_all_plots(base_output_dir, results)
-    
+
     # Print comprehensive final summary
     print_final_summary(results, base_output_dir, start_time)
 
@@ -1838,22 +1952,22 @@ def generate_plots_only(base_output_dir="entropy_experiments"):
     if not os.path.exists(base_output_dir):
         print(f"❌ Error: Output directory {base_output_dir} does not exist")
         return
-    
+
     # Load experiment summary
     summary_path = os.path.join(base_output_dir, "experiment_summary.json")
     if not os.path.exists(summary_path):
         print(f"❌ Error: No experiment summary found at {summary_path}")
         return
-    
-    with open(summary_path, 'r') as f:
+
+    with open(summary_path, "r") as f:
         summary_data = json.load(f)
-    
-    results = summary_data.get('experiments', {})
-    
+
+    results = summary_data.get("experiments", {})
+
     if not results:
         print("❌ Error: No experiment results found in summary")
         return
-    
+
     print(f"🎨 Generating plots for {len(results)} experiments...")
     generate_all_plots(base_output_dir, results)
     print("✅ Plot generation complete!")
@@ -1861,7 +1975,7 @@ def generate_plots_only(base_output_dir="entropy_experiments"):
 
 if __name__ == "__main__":
     import sys
-    
+
     if len(sys.argv) > 1 and sys.argv[1] == "--plots-only":
         # Generate plots from existing data
         output_dir = sys.argv[2] if len(sys.argv) > 2 else "entropy_experiments"

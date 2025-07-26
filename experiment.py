@@ -1772,6 +1772,9 @@ def generate_experiment_comparison_plots(base_output_dir, results):
     generate_performance_matrix_plot(base_output_dir, experiment_data)
     generate_detailed_analysis_plots(base_output_dir, experiment_data)
 
+    # Generate comprehensive text reports
+    generate_text_reports(base_output_dir, experiment_data, entropy_evolution_data)
+
 
 def generate_basic_comparison_plots(base_output_dir, experiment_data):
     """Generate basic comparison plots"""
@@ -2439,6 +2442,318 @@ def generate_detailed_analysis_plots(base_output_dir, experiment_data):
     print(f"📈 Detailed analysis plot saved: {detailed_path}")
 
 
+def generate_text_reports(base_output_dir, experiment_data, entropy_evolution_data):
+    """Generate comprehensive text reports for all analyses"""
+    print("\n📝 Generating comprehensive text reports...")
+
+    # Generate main analysis report
+    generate_main_analysis_report(
+        base_output_dir, experiment_data, entropy_evolution_data
+    )
+
+    # Generate individual experiment summaries
+    generate_individual_experiment_reports(
+        base_output_dir, experiment_data, entropy_evolution_data
+    )
+
+    # Generate comparative analysis report
+    generate_comparative_analysis_report(base_output_dir, experiment_data)
+
+    # Generate entropy evolution analysis
+    generate_entropy_evolution_report(
+        base_output_dir, experiment_data, entropy_evolution_data
+    )
+
+    print("✅ All text reports generated successfully!")
+
+
+def generate_main_analysis_report(
+    base_output_dir, experiment_data, entropy_evolution_data
+):
+    """Generate the main comprehensive analysis report"""
+    report_path = os.path.join(base_output_dir, "COMPREHENSIVE_ANALYSIS_REPORT.md")
+
+    with open(report_path, "w") as f:
+        f.write("# Comprehensive nanoGPT Entropy Analysis Report\n\n")
+        f.write(f"Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        # Executive Summary
+        f.write("## Executive Summary\n\n")
+        f.write(
+            f"This report analyzes entropy behavior across {len(experiment_data)} experiments "
+        )
+        f.write(
+            f"involving {len(set(exp['model_config'] for exp in experiment_data))} model configurations "
+        )
+        f.write(
+            f"and {len(set(exp['dataset_type'] for exp in experiment_data))} dataset types.\n\n"
+        )
+
+        if experiment_data:
+            final_entropies = [exp["final_entropy"] for exp in experiment_data]
+            f.write(f"**Key Findings:**\n")
+            f.write(
+                f"- Final entropy range: {min(final_entropies):.6f} to {max(final_entropies):.6f} bits\n"
+            )
+            f.write(
+                f"- Mean final entropy: {np.mean(final_entropies):.6f} ± {np.std(final_entropies):.6f} bits\n"
+            )
+
+            # Find best and worst performers
+            best_exp = min(experiment_data, key=lambda x: x["final_entropy"])
+            worst_exp = max(experiment_data, key=lambda x: x["final_entropy"])
+            f.write(
+                f"- Best performing: {best_exp['name']} ({best_exp['final_entropy']:.6f} bits)\n"
+            )
+            f.write(
+                f"- Worst performing: {worst_exp['name']} ({worst_exp['final_entropy']:.6f} bits)\n\n"
+            )
+
+        # Detailed Results Table
+        f.write("## Detailed Results\n\n")
+        f.write(
+            "| Experiment | Model Config | Dataset | Model Size (M) | Final Entropy (bits) | Entropy Change |\n"
+        )
+        f.write(
+            "|-----------|-------------|---------|---------------|---------------------|---------------|\n"
+        )
+
+        for exp in sorted(experiment_data, key=lambda x: x["final_entropy"]):
+            model_size_m = exp["model_size"] / 1e6
+            entropy_change = (
+                exp["scaling_data"].get("entropy_change", 0)
+                if exp["scaling_data"]
+                else 0
+            )
+            f.write(
+                f"| {exp['name']} | {exp['model_config']} | {exp['dataset_type']} | "
+            )
+            f.write(
+                f"{model_size_m:.1f} | {exp['final_entropy']:.6f} | {entropy_change:+.6f} |\n"
+            )
+
+        # Model Configuration Analysis
+        f.write("\n## Model Configuration Analysis\n\n")
+        model_configs = list(set(exp["model_config"] for exp in experiment_data))
+
+        for model_config in model_configs:
+            model_exps = [
+                exp for exp in experiment_data if exp["model_config"] == model_config
+            ]
+            if model_exps:
+                model_entropies = [exp["final_entropy"] for exp in model_exps]
+                f.write(f"### {model_config.replace('_', ' ').title()}\n\n")
+                f.write(f"- Experiments: {len(model_exps)}\n")
+                f.write(
+                    f"- Model size: {model_exps[0]['model_size'] / 1e6:.1f}M parameters\n"
+                )
+                f.write(
+                    f"- Entropy range: {min(model_entropies):.6f} to {max(model_entropies):.6f} bits\n"
+                )
+                f.write(
+                    f"- Mean entropy: {np.mean(model_entropies):.6f} ± {np.std(model_entropies):.6f} bits\n"
+                )
+
+                # Best dataset for this model
+                best_dataset_exp = min(model_exps, key=lambda x: x["final_entropy"])
+                f.write(
+                    f"- Best dataset: {best_dataset_exp['dataset_type']} ({best_dataset_exp['final_entropy']:.6f} bits)\n\n"
+                )
+
+        # Dataset Analysis
+        f.write("## Dataset Analysis\n\n")
+        dataset_types = list(set(exp["dataset_type"] for exp in experiment_data))
+
+        for dataset_type in dataset_types:
+            dataset_exps = [
+                exp for exp in experiment_data if exp["dataset_type"] == dataset_type
+            ]
+            if dataset_exps:
+                dataset_entropies = [exp["final_entropy"] for exp in dataset_exps]
+                f.write(f"### {dataset_type.title()} Dataset\n\n")
+                f.write(f"- Experiments: {len(dataset_exps)}\n")
+                f.write(
+                    f"- Entropy range: {min(dataset_entropies):.6f} to {max(dataset_entropies):.6f} bits\n"
+                )
+                f.write(
+                    f"- Mean entropy: {np.mean(dataset_entropies):.6f} ± {np.std(dataset_entropies):.6f} bits\n"
+                )
+
+                # Best model for this dataset
+                best_model_exp = min(dataset_exps, key=lambda x: x["final_entropy"])
+                f.write(
+                    f"- Best model: {best_model_exp['model_config']} ({best_model_exp['final_entropy']:.6f} bits)\n\n"
+                )
+
+        # Statistical Analysis
+        if len(experiment_data) > 1:
+            f.write("## Statistical Analysis\n\n")
+
+            # Correlation between model size and entropy
+            model_sizes = [exp["model_size"] for exp in experiment_data]
+            final_entropies = [exp["final_entropy"] for exp in experiment_data]
+
+            if len(set(model_sizes)) > 1:  # Only if we have different model sizes
+                correlation = np.corrcoef(model_sizes, final_entropies)[0, 1]
+                f.write(f"### Model Size vs Entropy\n\n")
+                f.write(f"- Correlation coefficient: {correlation:.4f}\n")
+
+                if abs(correlation) > 0.7:
+                    strength = "strong"
+                elif abs(correlation) > 0.3:
+                    strength = "moderate"
+                else:
+                    strength = "weak"
+
+                direction = "positive" if correlation > 0 else "negative"
+                f.write(f"- Relationship: {strength} {direction} correlation\n")
+
+                if correlation > 0:
+                    f.write(
+                        "- Interpretation: Larger models tend to have higher entropy\n\n"
+                    )
+                else:
+                    f.write(
+                        "- Interpretation: Larger models tend to have lower entropy\n\n"
+                    )
+
+            # ANOVA-style analysis if we have multiple groups
+            if len(model_configs) > 1:
+                f.write(f"### Model Configuration Comparison\n\n")
+
+                # Calculate between-group and within-group variance
+                overall_mean = np.mean(final_entropies)
+
+                between_group_variance = 0
+                within_group_variance = 0
+                total_n = 0
+
+                for model_config in model_configs:
+                    model_entropies = [
+                        exp["final_entropy"]
+                        for exp in experiment_data
+                        if exp["model_config"] == model_config
+                    ]
+                    if len(model_entropies) > 0:
+                        group_mean = np.mean(model_entropies)
+                        n = len(model_entropies)
+                        total_n += n
+
+                        between_group_variance += n * (group_mean - overall_mean) ** 2
+                        within_group_variance += sum(
+                            (x - group_mean) ** 2 for x in model_entropies
+                        )
+
+                if within_group_variance > 0:
+                    f_ratio = (between_group_variance / (len(model_configs) - 1)) / (
+                        within_group_variance / (total_n - len(model_configs))
+                    )
+                    f.write(f"- F-ratio: {f_ratio:.4f}\n")
+
+                    if f_ratio > 4.0:  # Rough threshold for significance
+                        f.write(
+                            "- Model configurations show significantly different entropy patterns\n\n"
+                        )
+                    else:
+                        f.write(
+                            "- Model configurations show similar entropy patterns\n\n"
+                        )
+
+        # Key Insights
+        f.write("## Key Insights\n\n")
+
+        if experiment_data:
+            # Find patterns
+            insights = []
+
+            # Dataset performance patterns
+            if len(dataset_types) > 1:
+                dataset_means = {}
+                for dataset in dataset_types:
+                    dataset_entropies = [
+                        exp["final_entropy"]
+                        for exp in experiment_data
+                        if exp["dataset_type"] == dataset
+                    ]
+                    if dataset_entropies:
+                        dataset_means[dataset] = np.mean(dataset_entropies)
+
+                if dataset_means:
+                    best_dataset = min(dataset_means.items(), key=lambda x: x[1])
+                    worst_dataset = max(dataset_means.items(), key=lambda x: x[1])
+
+                    insights.append(
+                        f"**Dataset Performance**: {best_dataset[0].title()} dataset consistently produces "
+                    )
+                    insights.append(
+                        f"lower entropy ({best_dataset[1]:.6f} bits avg) compared to {worst_dataset[0].title()} "
+                    )
+                    insights.append(f"dataset ({worst_dataset[1]:.6f} bits avg).")
+
+            # Model size efficiency
+            if len(model_configs) > 1:
+                efficiency_scores = {}
+                for model_config in model_configs:
+                    model_exps = [
+                        exp
+                        for exp in experiment_data
+                        if exp["model_config"] == model_config
+                    ]
+                    if model_exps:
+                        avg_entropy = np.mean(
+                            [exp["final_entropy"] for exp in model_exps]
+                        )
+                        model_size = model_exps[0]["model_size"] / 1e6
+                        efficiency_scores[model_config] = avg_entropy / model_size
+
+                if efficiency_scores:
+                    most_efficient = min(efficiency_scores.items(), key=lambda x: x[1])
+                    insights.append(
+                        f"\n\n**Model Efficiency**: {most_efficient[0].replace('_', ' ').title()} "
+                    )
+                    insights.append(f"shows the best entropy-per-parameter efficiency ")
+                    insights.append(f"({most_efficient[1]:.6f} bits/M params).")
+
+            # Entropy change patterns
+            entropy_changes = [
+                exp["scaling_data"].get("entropy_change", 0)
+                for exp in experiment_data
+                if exp["scaling_data"]
+            ]
+            if entropy_changes:
+                decreasing = sum(1 for change in entropy_changes if change < -0.001)
+                increasing = sum(1 for change in entropy_changes if change > 0.001)
+                stable = len(entropy_changes) - decreasing - increasing
+
+                insights.append(
+                    f"\n\n**Training Dynamics**: {decreasing} experiments showed entropy decrease, "
+                )
+                insights.append(
+                    f"{increasing} showed increase, {stable} remained stable during training."
+                )
+
+            for insight in insights:
+                f.write(insight)
+
+        f.write("\n\n## Files Generated\n\n")
+        f.write("This analysis generated the following visualization files:\n\n")
+        f.write("- `basic_experiment_comparison.png` - Overview comparison charts\n")
+        f.write(
+            "- `entropy_evolution_comparison.png` - Training dynamics across experiments\n"
+        )
+        f.write(
+            "- `performance_matrix.png` - Heatmap matrices of performance metrics\n"
+        )
+        f.write("- `detailed_analysis.png` - Statistical analysis and distributions\n")
+        f.write("- Individual experiment plots in each experiment directory\n\n")
+
+        f.write(
+            "For detailed methodology and implementation details, see the source code and individual experiment logs.\n"
+        )
+
+    print(f"📝 Main analysis report saved: {report_path}")
+
+
 def print_final_summary(results, base_output_dir, start_time):
     """Print comprehensive final summary"""
     end_time = time.time()
@@ -2673,6 +2988,476 @@ def main():
 
     # Print comprehensive final summary
     print_final_summary(results, base_output_dir, start_time)
+
+
+def generate_individual_experiment_reports(
+    base_output_dir, experiment_data, entropy_evolution_data
+):
+    """Generate individual text reports for each experiment"""
+    reports_dir = os.path.join(base_output_dir, "text_reports")
+    os.makedirs(reports_dir, exist_ok=True)
+
+    for exp in experiment_data:
+        exp_name = exp["name"]
+        report_path = os.path.join(reports_dir, f"{exp_name}_report.txt")
+
+        with open(report_path, "w") as f:
+            f.write(f"EXPERIMENT REPORT: {exp_name.upper()}\n")
+            f.write("=" * 60 + "\n\n")
+
+            # Basic Information
+            f.write("CONFIGURATION:\n")
+            f.write(f"  Model Configuration: {exp['model_config']}\n")
+            f.write(f"  Dataset Type: {exp['dataset_type']}\n")
+            f.write(
+                f"  Model Size: {exp['model_size']:,} parameters ({exp['model_size']/1e6:.1f}M)\n\n"
+            )
+
+            # Results
+            f.write("RESULTS:\n")
+            f.write(f"  Final Entropy: {exp['final_entropy']:.6f} bits\n")
+
+            if exp["scaling_data"]:
+                scaling = exp["scaling_data"]
+                f.write(
+                    f"  Initial Entropy: {scaling.get('initial_entropy', 'N/A'):.6f} bits\n"
+                )
+                f.write(
+                    f"  Entropy Change: {scaling.get('entropy_change', 0):+.6f} bits\n"
+                )
+                f.write(
+                    f"  Mean Change Rate: {scaling.get('mean_change_rate', 0):.8f} bits/iter\n"
+                )
+                f.write(
+                    f"  Max Entropy: {scaling.get('max_entropy', 'N/A'):.6f} bits\n"
+                )
+                f.write(
+                    f"  Min Entropy: {scaling.get('min_entropy', 'N/A'):.6f} bits\n"
+                )
+                f.write(
+                    f"  Entropy Stability (CV): {scaling.get('entropy_coefficient_variation', 'N/A'):.6f}\n\n"
+                )
+
+            # Entropy Evolution Analysis
+            if exp_name in entropy_evolution_data:
+                entropy_data = entropy_evolution_data[exp_name]
+                if "entropy_total" in entropy_data["entropy_history"]:
+                    entropy_series = entropy_data["entropy_history"]["entropy_total"]
+                    iterations = entropy_data["iteration_history"]
+
+                    min_len = min(len(entropy_series), len(iterations))
+                    if min_len > 0:
+                        entropy_series = entropy_series[:min_len]
+                        iterations = iterations[:min_len]
+
+                        f.write("ENTROPY EVOLUTION ANALYSIS:\n")
+                        f.write(f"  Data Points: {len(entropy_series)}\n")
+                        f.write(
+                            f"  Training Iterations: {iterations[0]} to {iterations[-1]}\n"
+                        )
+                        f.write(
+                            f"  Entropy Range: {min(entropy_series):.6f} to {max(entropy_series):.6f} bits\n"
+                        )
+
+                        # Trend analysis
+                        if len(entropy_series) > 1:
+                            # Simple linear trend
+                            x = np.arange(len(entropy_series))
+                            slope, intercept = np.polyfit(x, entropy_series, 1)
+
+                            f.write(
+                                f"  Linear Trend Slope: {slope:.8f} bits/measurement\n"
+                            )
+
+                            if abs(slope) < 1e-6:
+                                trend = "stable"
+                            elif slope > 0:
+                                trend = "increasing"
+                            else:
+                                trend = "decreasing"
+
+                            f.write(f"  Overall Trend: {trend}\n")
+
+                            # Volatility (standard deviation)
+                            volatility = np.std(entropy_series)
+                            f.write(f"  Entropy Volatility: {volatility:.6f} bits\n\n")
+
+                        # Key timepoints
+                        f.write("KEY TIMEPOINTS:\n")
+                        quarter_points = [
+                            0,
+                            len(entropy_series) // 4,
+                            len(entropy_series) // 2,
+                            3 * len(entropy_series) // 4,
+                            len(entropy_series) - 1,
+                        ]
+                        labels = ["Start", "25%", "50%", "75%", "End"]
+
+                        for i, (point, label) in enumerate(zip(quarter_points, labels)):
+                            if point < len(entropy_series):
+                                f.write(
+                                    f"  {label:5s} (iter {iterations[point]:6,}): {entropy_series[point]:.6f} bits\n"
+                                )
+
+                        f.write("\n")
+
+            # Performance Ranking
+            all_entropies = [e["final_entropy"] for e in experiment_data]
+            rank = sorted(all_entropies).index(exp["final_entropy"]) + 1
+            f.write("PERFORMANCE RANKING:\n")
+            f.write(f"  Rank: {rank} out of {len(experiment_data)} experiments\n")
+            f.write(
+                f"  Percentile: {((len(experiment_data) - rank) / len(experiment_data) * 100):.1f}th percentile\n\n"
+            )
+
+            # Comparison with same model/dataset
+            same_model = [
+                e for e in experiment_data if e["model_config"] == exp["model_config"]
+            ]
+            same_dataset = [
+                e for e in experiment_data if e["dataset_type"] == exp["dataset_type"]
+            ]
+
+            if len(same_model) > 1:
+                model_entropies = [e["final_entropy"] for e in same_model]
+                model_rank = sorted(model_entropies).index(exp["final_entropy"]) + 1
+                f.write(f"WITHIN MODEL CONFIG ({exp['model_config']}):\n")
+                f.write(f"  Rank: {model_rank} out of {len(same_model)}\n")
+                f.write(
+                    f"  Model Config Average: {np.mean(model_entropies):.6f} bits\n\n"
+                )
+
+            if len(same_dataset) > 1:
+                dataset_entropies = [e["final_entropy"] for e in same_dataset]
+                dataset_rank = sorted(dataset_entropies).index(exp["final_entropy"]) + 1
+                f.write(f"WITHIN DATASET ({exp['dataset_type']}):\n")
+                f.write(f"  Rank: {dataset_rank} out of {len(same_dataset)}\n")
+                f.write(f"  Dataset Average: {np.mean(dataset_entropies):.6f} bits\n\n")
+
+    print(f"📝 Individual experiment reports saved in: {reports_dir}")
+
+
+def generate_comparative_analysis_report(base_output_dir, experiment_data):
+    """Generate comparative analysis text report"""
+    report_path = os.path.join(base_output_dir, "comparative_analysis.txt")
+
+    with open(report_path, "w") as f:
+        f.write("COMPARATIVE ANALYSIS REPORT\n")
+        f.write("=" * 50 + "\n\n")
+
+        # Model Configuration Comparison
+        f.write("MODEL CONFIGURATION COMPARISON:\n")
+        f.write("-" * 35 + "\n")
+
+        model_configs = list(set(exp["model_config"] for exp in experiment_data))
+        for model_config in sorted(model_configs):
+            model_exps = [
+                exp for exp in experiment_data if exp["model_config"] == model_config
+            ]
+            if model_exps:
+                entropies = [exp["final_entropy"] for exp in model_exps]
+                f.write(f"\n{model_config.upper().replace('_', ' ')}:\n")
+                f.write(f"  Experiments: {len(model_exps)}\n")
+                f.write(
+                    f"  Model Size: {model_exps[0]['model_size']/1e6:.1f}M parameters\n"
+                )
+                f.write(
+                    f"  Mean Entropy: {np.mean(entropies):.6f} ± {np.std(entropies):.6f} bits\n"
+                )
+                f.write(f"  Range: {min(entropies):.6f} to {max(entropies):.6f} bits\n")
+
+                # Best and worst datasets for this model
+                best_exp = min(model_exps, key=lambda x: x["final_entropy"])
+                worst_exp = max(model_exps, key=lambda x: x["final_entropy"])
+                f.write(
+                    f"  Best Dataset: {best_exp['dataset_type']} ({best_exp['final_entropy']:.6f} bits)\n"
+                )
+                f.write(
+                    f"  Worst Dataset: {worst_exp['dataset_type']} ({worst_exp['final_entropy']:.6f} bits)\n"
+                )
+
+        # Dataset Type Comparison
+        f.write("\n\nDATASET TYPE COMPARISON:\n")
+        f.write("-" * 25 + "\n")
+
+        dataset_types = list(set(exp["dataset_type"] for exp in experiment_data))
+        for dataset_type in sorted(dataset_types):
+            dataset_exps = [
+                exp for exp in experiment_data if exp["dataset_type"] == dataset_type
+            ]
+            if dataset_exps:
+                entropies = [exp["final_entropy"] for exp in dataset_exps]
+                f.write(f"\n{dataset_type.upper()}:\n")
+                f.write(f"  Experiments: {len(dataset_exps)}\n")
+                f.write(
+                    f"  Mean Entropy: {np.mean(entropies):.6f} ± {np.std(entropies):.6f} bits\n"
+                )
+                f.write(f"  Range: {min(entropies):.6f} to {max(entropies):.6f} bits\n")
+
+                # Best and worst models for this dataset
+                best_exp = min(dataset_exps, key=lambda x: x["final_entropy"])
+                worst_exp = max(dataset_exps, key=lambda x: x["final_entropy"])
+                f.write(
+                    f"  Best Model: {best_exp['model_config']} ({best_exp['final_entropy']:.6f} bits)\n"
+                )
+                f.write(
+                    f"  Worst Model: {worst_exp['model_config']} ({worst_exp['final_entropy']:.6f} bits)\n"
+                )
+
+        # Performance Matrix
+        f.write("\n\nPERFORMANCE MATRIX (Final Entropy in bits):\n")
+        f.write("-" * 45 + "\n\n")
+
+        # Create a table
+        f.write(f"{'Model Config':<20} ")
+        for dataset in sorted(dataset_types):
+            f.write(f"{dataset:<12} ")
+        f.write("\n" + "-" * (20 + 12 * len(dataset_types)) + "\n")
+
+        for model in sorted(model_configs):
+            f.write(f"{model:<20} ")
+            for dataset in sorted(dataset_types):
+                matching_exp = next(
+                    (
+                        exp
+                        for exp in experiment_data
+                        if exp["model_config"] == model
+                        and exp["dataset_type"] == dataset
+                    ),
+                    None,
+                )
+                if matching_exp:
+                    f.write(f"{matching_exp['final_entropy']:<12.6f} ")
+                else:
+                    f.write(f"{'N/A':<12} ")
+            f.write("\n")
+
+        # Statistical Summary
+        f.write("\n\nSTATISTICAL SUMMARY:\n")
+        f.write("-" * 20 + "\n")
+
+        all_entropies = [exp["final_entropy"] for exp in experiment_data]
+        f.write(f"Total Experiments: {len(experiment_data)}\n")
+        f.write(f"Overall Mean: {np.mean(all_entropies):.6f} bits\n")
+        f.write(f"Overall Std Dev: {np.std(all_entropies):.6f} bits\n")
+        f.write(
+            f"Overall Range: {min(all_entropies):.6f} to {max(all_entropies):.6f} bits\n"
+        )
+        f.write(
+            f"Coefficient of Variation: {np.std(all_entropies)/np.mean(all_entropies):.4f}\n"
+        )
+
+        # Best and worst overall
+        best_overall = min(experiment_data, key=lambda x: x["final_entropy"])
+        worst_overall = max(experiment_data, key=lambda x: x["final_entropy"])
+        f.write(
+            f"\nBest Overall: {best_overall['name']} ({best_overall['final_entropy']:.6f} bits)\n"
+        )
+        f.write(
+            f"Worst Overall: {worst_overall['name']} ({worst_overall['final_entropy']:.6f} bits)\n"
+        )
+        f.write(
+            f"Performance Spread: {worst_overall['final_entropy'] - best_overall['final_entropy']:.6f} bits\n"
+        )
+
+    print(f"📝 Comparative analysis report saved: {report_path}")
+
+
+def generate_entropy_evolution_report(
+    base_output_dir, experiment_data, entropy_evolution_data
+):
+    """Generate entropy evolution analysis report"""
+    if not entropy_evolution_data:
+        return
+
+    report_path = os.path.join(base_output_dir, "entropy_evolution_analysis.txt")
+
+    with open(report_path, "w") as f:
+        f.write("ENTROPY EVOLUTION ANALYSIS REPORT\n")
+        f.write("=" * 40 + "\n\n")
+
+        f.write(
+            "This report analyzes how entropy changes during training across all experiments.\n\n"
+        )
+
+        # Overall evolution patterns
+        f.write("OVERALL EVOLUTION PATTERNS:\n")
+        f.write("-" * 30 + "\n")
+
+        evolution_stats = []
+
+        for exp_name, entropy_data in entropy_evolution_data.items():
+            if "entropy_total" in entropy_data["entropy_history"]:
+                entropy_series = entropy_data["entropy_history"]["entropy_total"]
+                iterations = entropy_data["iteration_history"]
+
+                min_len = min(len(entropy_series), len(iterations))
+                if min_len > 1:
+                    entropy_series = entropy_series[:min_len]
+
+                    # Calculate trend
+                    x = np.arange(len(entropy_series))
+                    slope, _ = np.polyfit(x, entropy_series, 1)
+
+                    # Calculate volatility
+                    volatility = np.std(entropy_series)
+
+                    # Get experiment info
+                    exp_info = next(
+                        (exp for exp in experiment_data if exp["name"] == exp_name),
+                        None,
+                    )
+
+                    evolution_stats.append(
+                        {
+                            "name": exp_name,
+                            "model_config": exp_info["model_config"]
+                            if exp_info
+                            else "unknown",
+                            "dataset_type": exp_info["dataset_type"]
+                            if exp_info
+                            else "unknown",
+                            "slope": slope,
+                            "volatility": volatility,
+                            "initial_entropy": entropy_series[0],
+                            "final_entropy": entropy_series[-1],
+                            "data_points": len(entropy_series),
+                        }
+                    )
+
+        if evolution_stats:
+            # Sort by slope to see trends
+            evolution_stats.sort(key=lambda x: x["slope"])
+
+            f.write(
+                f"Total experiments with evolution data: {len(evolution_stats)}\n\n"
+            )
+
+            # Trend categories
+            decreasing = [stat for stat in evolution_stats if stat["slope"] < -1e-6]
+            stable = [stat for stat in evolution_stats if abs(stat["slope"]) <= 1e-6]
+            increasing = [stat for stat in evolution_stats if stat["slope"] > 1e-6]
+
+            f.write(f"Trend Distribution:\n")
+            f.write(
+                f"  Decreasing entropy: {len(decreasing)} experiments ({len(decreasing)/len(evolution_stats)*100:.1f}%)\n"
+            )
+            f.write(
+                f"  Stable entropy: {len(stable)} experiments ({len(stable)/len(evolution_stats)*100:.1f}%)\n"
+            )
+            f.write(
+                f"  Increasing entropy: {len(increasing)} experiments ({len(increasing)/len(evolution_stats)*100:.1f}%)\n\n"
+            )
+
+            # Detailed breakdown
+            if decreasing:
+                f.write("DECREASING ENTROPY EXPERIMENTS:\n")
+                for stat in decreasing:
+                    f.write(f"  {stat['name']}: {stat['slope']:.8f} bits/step ")
+                    f.write(
+                        f"({stat['initial_entropy']:.6f} → {stat['final_entropy']:.6f} bits)\n"
+                    )
+                f.write("\n")
+
+            if increasing:
+                f.write("INCREASING ENTROPY EXPERIMENTS:\n")
+                for stat in increasing:
+                    f.write(f"  {stat['name']}: {stat['slope']:.8f} bits/step ")
+                    f.write(
+                        f"({stat['initial_entropy']:.6f} → {stat['final_entropy']:.6f} bits)\n"
+                    )
+                f.write("\n")
+
+            if stable:
+                f.write("STABLE ENTROPY EXPERIMENTS:\n")
+                for stat in stable:
+                    f.write(f"  {stat['name']}: {stat['slope']:.8f} bits/step ")
+                    f.write(f"(volatility: {stat['volatility']:.6f} bits)\n")
+                f.write("\n")
+
+            # Volatility analysis
+            f.write("VOLATILITY ANALYSIS:\n")
+            f.write("-" * 20 + "\n")
+
+            volatilities = [stat["volatility"] for stat in evolution_stats]
+            f.write(f"Mean volatility: {np.mean(volatilities):.6f} bits\n")
+            f.write(
+                f"Volatility range: {min(volatilities):.6f} to {max(volatilities):.6f} bits\n\n"
+            )
+
+            # Most/least volatile
+            most_volatile = max(evolution_stats, key=lambda x: x["volatility"])
+            least_volatile = min(evolution_stats, key=lambda x: x["volatility"])
+
+            f.write(
+                f"Most volatile: {most_volatile['name']} ({most_volatile['volatility']:.6f} bits)\n"
+            )
+            f.write(
+                f"Least volatile: {least_volatile['name']} ({least_volatile['volatility']:.6f} bits)\n\n"
+            )
+
+            # Model/Dataset pattern analysis
+            f.write("PATTERN ANALYSIS BY MODEL CONFIGURATION:\n")
+            f.write("-" * 45 + "\n")
+
+            model_configs = list(set(stat["model_config"] for stat in evolution_stats))
+            for model_config in model_configs:
+                model_stats = [
+                    stat
+                    for stat in evolution_stats
+                    if stat["model_config"] == model_config
+                ]
+                if model_stats:
+                    model_slopes = [stat["slope"] for stat in model_stats]
+                    model_volatilities = [stat["volatility"] for stat in model_stats]
+
+                    f.write(f"\n{model_config.upper().replace('_', ' ')}:\n")
+                    f.write(f"  Experiments: {len(model_stats)}\n")
+                    f.write(f"  Mean slope: {np.mean(model_slopes):.8f} bits/step\n")
+                    f.write(
+                        f"  Mean volatility: {np.mean(model_volatilities):.6f} bits\n"
+                    )
+
+                    dec_count = sum(1 for slope in model_slopes if slope < -1e-6)
+                    inc_count = sum(1 for slope in model_slopes if slope > 1e-6)
+                    sta_count = len(model_slopes) - dec_count - inc_count
+
+                    f.write(
+                        f"  Trends: {dec_count} decreasing, {sta_count} stable, {inc_count} increasing\n"
+                    )
+
+            f.write("\n\nPATTERN ANALYSIS BY DATASET TYPE:\n")
+            f.write("-" * 35 + "\n")
+
+            dataset_types = list(set(stat["dataset_type"] for stat in evolution_stats))
+            for dataset_type in dataset_types:
+                dataset_stats = [
+                    stat
+                    for stat in evolution_stats
+                    if stat["dataset_type"] == dataset_type
+                ]
+                if dataset_stats:
+                    dataset_slopes = [stat["slope"] for stat in dataset_stats]
+                    dataset_volatilities = [
+                        stat["volatility"] for stat in dataset_stats
+                    ]
+
+                    f.write(f"\n{dataset_type.upper()}:\n")
+                    f.write(f"  Experiments: {len(dataset_stats)}\n")
+                    f.write(f"  Mean slope: {np.mean(dataset_slopes):.8f} bits/step\n")
+                    f.write(
+                        f"  Mean volatility: {np.mean(dataset_volatilities):.6f} bits\n"
+                    )
+
+                    dec_count = sum(1 for slope in dataset_slopes if slope < -1e-6)
+                    inc_count = sum(1 for slope in dataset_slopes if slope > 1e-6)
+                    sta_count = len(dataset_slopes) - dec_count - inc_count
+
+                    f.write(
+                        f"  Trends: {dec_count} decreasing, {sta_count} stable, {inc_count} increasing\n"
+                    )
+
+    print(f"📝 Entropy evolution report saved: {report_path}")
 
 
 def generate_plots_only(base_output_dir="entropy_experiments"):
